@@ -110,7 +110,7 @@ mod tests {
     use crate::image::{Error as ImageError, Format, Header, Image};
     use insta::assert_json_snapshot;
     use std::{
-        io::{Cursor, ErrorKind, Seek as _, Write as _},
+        io::{Cursor, ErrorKind, Read as _, Seek as _, Write as _},
         path::PathBuf,
     };
 
@@ -154,6 +154,35 @@ mod tests {
         let output = image.dst.into_inner();
         assert_eq!(output.len(), 32 + 4096);
         assert_eq!(output.last(), Some(&0xa5));
+        Ok(())
+    }
+
+    #[test]
+    fn test_compressed_round_trip_preserves_final_nonzero_byte()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut page = vec![0_u8; 4096];
+        *page.last_mut().ok_or("empty page")? = 0xa5;
+        let expected = page.clone();
+        let mut image = Image::from_streams(
+            Format::AvmlCompressed,
+            Cursor::new(page),
+            Cursor::new(Vec::new()),
+        );
+        image.align_src = true;
+        for range in parse_one_page()? {
+            image.copy_block(range)?;
+        }
+        let mut converter = Image::from_streams(
+            Format::Lime,
+            Cursor::new(image.dst.into_inner()),
+            Cursor::new(Vec::new()),
+        );
+        converter.convert_block()?;
+        let mut output = Cursor::new(converter.dst.into_inner());
+        assert_eq!(Header::read(&mut output)?.range, 0x1000..0x2000);
+        let mut payload = Vec::new();
+        output.read_to_end(&mut payload)?;
+        assert_eq!(payload, expected);
         Ok(())
     }
 
